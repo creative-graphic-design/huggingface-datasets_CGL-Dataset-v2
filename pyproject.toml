@@ -7,10 +7,9 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.9"
-datasets = {extras = ["vision"], version = "^2.16.1"}
+datasets = { extras = ["vision"], version = "^2.16.1" }
 pycocotools = "^2.0.7"
 torch = ">=1.0.0"
-
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.1.11"
