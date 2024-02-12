@@ -203,8 +203,14 @@ class TextData(object):
         )
 
 
-@dataclass
 class TextAnnotationData(object):
+    @classmethod
+    def from_dict(cls, *args, **kwargs):
+        raise NotImplementedError
+
+
+@dataclass
+class TextAnnotationTrainData(TextAnnotationData):
     is_sample: bool
     image: str
     rotate: float
@@ -215,11 +221,12 @@ class TextAnnotationData(object):
     def id_images(self) -> int:
         # 'ali_anno_1/22.png' -> ['ali_anno_1', '22.png']
         _, id_filename = self.image.split("/")
+        # 22.png -> ['22', '.png']
         root, _ = os.path.splitext(id_filename)
         return int(root)
 
     @classmethod
-    def from_dict(cls, json_dict: JsonDict) -> "TextAnnotationData":
+    def from_dict(cls, json_dict: JsonDict) -> "TextAnnotationTrainData":
         text_data = [TextData.from_dict(d) for d in json_dict["data"]]
         return cls(
             is_sample=bool(int(json_dict["isSample"])),
@@ -231,7 +238,7 @@ class TextAnnotationData(object):
 
 
 @dataclass
-class TextAnnotationTestData(object):
+class TextAnnotationTestData(TextAnnotationData):
     image_filename: str
     product_detail_highlighted_word: Optional[List[str]] = None
     blc_text: Optional[List[str]] = None
@@ -299,18 +306,18 @@ def load_categories_data(
     return categories
 
 
-def load_train_texts_data(
+def _load_train_texts_data(
     txt_path: pathlib.Path,
     image_dicts: List[JsonDict],
     tqdm_desc: str = "Load text annotations for training",
-) -> Dict[ImageId, TextAnnotationData]:
+) -> Dict[ImageId, TextAnnotationTrainData]:
     assert txt_path.stem == "train", txt_path
 
-    texts: Dict[ImageId, TextAnnotationData] = {}
+    texts: Dict[ImageId, TextAnnotationTrainData] = {}
     with txt_path.open("r") as rf:
         for line in tqdm(rf, desc=tqdm_desc):
             text_dict = ast.literal_eval(line)
-            text_data_ann = TextAnnotationData.from_dict(text_dict)
+            text_data_ann = TextAnnotationTrainData.from_dict(text_dict)
             image_dict = image_dicts[text_data_ann.id_images]
             image_id = image_dict["id"]
 
@@ -321,7 +328,7 @@ def load_train_texts_data(
     return texts
 
 
-def load_test_texts_data(
+def _load_test_texts_data(
     txt_path: pathlib.Path,
     images: Dict[ImageId, ImageData],
     tqdm_desc: str = "Load text annotations for test",
@@ -342,6 +349,25 @@ def load_test_texts_data(
 
             texts[image_id] = text_data_ann
     return texts
+
+
+def load_texts_data(
+    txt_path: pathlib.Path,
+    image_dicts: List[JsonDict],
+    images: Dict[ImageId, ImageData],
+):
+    if txt_path.stem == "train":
+        return _load_train_texts_data(
+            txt_path=txt_path,
+            image_dicts=image_dicts,
+        )
+    elif txt_path.stem == "test":
+        return _load_test_texts_data(
+            txt_path=txt_path,
+            images=images,
+        )
+    else:
+        raise ValueError(f"Unknown text file: {txt_path}")
 
 
 def load_annotation_data(
@@ -536,14 +562,9 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         images = load_images_data(image_dicts=ann_json["images"])
         categories = load_categories_data(category_dicts=ann_json["categories"])
 
-        if txt_path.stem == "train":
-            texts = load_train_texts_data(
-                txt_path=txt_path, image_dicts=ann_json["images"]
-            )
-        elif txt_path.stem == "test":
-            texts = load_test_texts_data(txt_path=txt_path, images=images)
-        else:
-            raise ValueError(f"Unknown text file: {txt_path}")
+        texts = load_texts_data(
+            txt_path=txt_path, image_dicts=ann_json["images"], images=images
+        )
 
         text_features = (
             load_text_features(
@@ -575,7 +596,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
                 example["annotations"].append(ann_dict)
 
             text_data = texts.get(image_id)
-            example["text_annotation"] = asdict(text_data) if text_data else None
+            example["text_annotation"] = asdict(text_data) if text_data else None  # type: ignore
 
             if text_features:
                 text_feature = text_features.get(image_id)
