@@ -94,7 +94,7 @@ Then place the downloaded files in the following structure and specify its path.
 import datasets as ds
 
 dataset = ds.load_dataset(
-    path="shunk031/PosterErase",
+    path="shunk031/CGL-Dataset-v2",
     data_dir="/path/to/datasets/RADM_dataset.tar.gz",
     decode_rle=True, # True if Run-length Encoding (RLE) is to be decoded and converted to binary mask.
     include_text_features=True, # True if RoBERTa-based text feature is to be loaded.
