@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "huggingface-datasets-cgl-dataset-v2"
+version = "0.1.0"
+description = ""
+authors = ["Shunsuke KITADA <shunsuke.kitada.0831@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+datasets = { extras = ["vision"], version = "^2.16.1" }
+pycocotools = "^2.0.7"
+torch = ">=1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.1.11"
+black = "^23.12.1"
+isort = "^5.13.2"
+mypy = "^1.8.0"
+pytest = "^7.4.4"
+types-pillow = "^10.1.0.20240106"
+types-pycocotools = "^2.0.0.20240106"
+types-tqdm = "^4.66.0.20240106"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
