@@ -49,5 +49,6 @@ def test_load_dataset(
         decode_rle=decode_rle,
         include_text_features=include_text_features,
     )
+    assert isinstance(dataset, ds.DatasetDict)
     assert dataset["train"].num_rows == expected_num_train
     assert dataset["test"].num_rows == expected_num_test
