@@ -233,12 +233,14 @@ class CGLv2Processor(InstancesProcessor):
             example = image_data.model_dump()
             example["image"] = image
 
-            text = texts[image_id]
-            example["text"] = text.model_dump()
+            text_data = texts.get(image_id)
+            example["text_annotation"] = text_data.model_dump() if text_data else None
 
             if text_features is not None:
-                text_feature = text_features[image_id]
-                example["text_feature"] = text_feature.model_dump()
+                text_feature = text_features.get(image_id)
+                example["text_feature"] = (
+                    text_feature.model_dump() if text_feature else None
+                )
 
             example["annotations"] = []
             for ann in image_anns:
@@ -428,4 +430,6 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
             images=images,
             annotations=annotations,
             categories=categories,
+            texts=texts,
+            text_features=text_features,
         )
