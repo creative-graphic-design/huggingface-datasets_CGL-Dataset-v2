@@ -105,9 +105,86 @@ class TextFeatureData(BaseModel):
 
 
 class CGLv2Processor(InstancesProcessor):
+    def get_features_base_dict(self):
+        return {
+            "image_id": ds.Value("int64"),
+            "file_name": ds.Value("string"),
+            "width": ds.Value("int64"),
+            "height": ds.Value("int64"),
+            "image": ds.Image(),
+        }
+
+    def get_features_instance_dict(self, decode_rle: bool):
+        segmentation_feature = (
+            ds.Image()
+            if decode_rle
+            else {
+                "counts": ds.Value("binary"),
+                "size": ds.Sequence(ds.Value("int32")),
+            }
+        )
+        return {
+            "annotation_id": ds.Value("int64"),
+            "area": ds.Value("int64"),
+            "bbox": ds.Sequence(ds.Value("int64")),
+            "category": {
+                "category_id": ds.Value("int64"),
+                "name": ds.Value("string"),
+                "supercategory": ds.Value("string"),
+            },
+            "category_id": ds.Value("int64"),
+            "image_id": ds.Value("int64"),
+            "iscrowd": ds.Value("bool"),
+            "segmentation": segmentation_feature,
+        }
+
+    def get_features_text_annotations_dict(self):
+        return {
+            "is_sample": ds.Value("bool"),
+            "image": ds.Value("string"),
+            "rotate": ds.Value("float32"),
+            "pin": ds.Value("string"),
+            "data": ds.Sequence(
+                {
+                    "category_description": ds.Value("string"),
+                    "points": ds.Sequence(
+                        {
+                            "x": ds.Value("int64"),
+                            "y": ds.Value("int64"),
+                        }
+                    ),
+                    "user_selected_value": {
+                        "name": ds.Value("string"),
+                    },
+                }
+            ),
+            "product_detail_highlighted_word": ds.Sequence(ds.Value("string")),
+            "blc_text": ds.Sequence(ds.Value("string")),
+            "adv_sellpoint": ds.Sequence(ds.Value("string")),
+        }
+
+    def get_features_text_features_dict(self):
+        return {
+            "num": ds.Value("int64"),
+            "pos": ds.Sequence(ds.Sequence(ds.Value("int64"))),
+            "feats": ds.Sequence(ds.Sequence(ds.Sequence(ds.Value("float32")))),
+        }
+
     def get_features(self, decode_rle: bool) -> ds.Features:
-        features = super().get_features(decode_rle)
-        breakpoint()
+        features_dict = self.get_features_base_dict()
+        annotations = ds.Sequence(
+            self.get_features_instance_dict(decode_rle=decode_rle)
+        )
+        text_annotations = self.get_features_text_annotations_dict()
+        text_features = self.get_features_text_features_dict()
+        features_dict.update(
+            {
+                "annotations": annotations,
+                "text_annotations": text_annotations,
+                "text_features": text_features,
+            }
+        )
+        return ds.Features(features_dict)
 
     def _load_train_texts_data(
         self,
@@ -266,70 +343,10 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         CGLDatasetV2Config(version=VERSION, description=_DESCRIPTION),
     ]
 
-    def _info(self) -> ds.DatasetInfo:
-        segmentation_feature = (
-            ds.Image()
-            if self.config.decode_rle  # type: ignore
-            else {
-                "counts": ds.Value("binary"),
-                "size": ds.Sequence(ds.Value("int32")),
-            }
-        )
-        features = ds.Features(
-            {
-                "image_id": ds.Value("int64"),
-                "file_name": ds.Value("string"),
-                "width": ds.Value("int64"),
-                "height": ds.Value("int64"),
-                "image": ds.Image(),
-                "annotations": ds.Sequence(
-                    {
-                        "annotation_id": ds.Value("int64"),
-                        "area": ds.Value("int64"),
-                        "bbox": ds.Sequence(ds.Value("int64")),
-                        "category": {
-                            "category_id": ds.Value("int64"),
-                            "name": ds.Value("string"),
-                            "supercategory": ds.Value("string"),
-                        },
-                        "category_id": ds.Value("int64"),
-                        "image_id": ds.Value("int64"),
-                        "iscrowd": ds.Value("bool"),
-                        "segmentation": segmentation_feature,
-                    }
-                ),
-                "text_annotation": {
-                    "is_sample": ds.Value("bool"),
-                    "image": ds.Value("string"),
-                    "rotate": ds.Value("float32"),
-                    "pin": ds.Value("string"),
-                    "data": ds.Sequence(
-                        {
-                            "category_description": ds.Value("string"),
-                            "points": ds.Sequence(
-                                {"x": ds.Value("int64"), "y": ds.Value("int64")}
-                            ),
-                            "user_selected_value": {"name": ds.Value("string")},
-                        }
-                    ),
-                    "product_detail_highlighted_word": ds.Sequence(ds.Value("string")),
-                    "blc_text": ds.Sequence(ds.Value("string")),
-                    "adv_sellpoint": ds.Sequence(ds.Value("string")),
-                },
-                "text_feature": {
-                    "num": ds.Value("int64"),
-                    "pos": ds.Sequence(ds.Sequence(ds.Value("int64"))),
-                    "feats": ds.Sequence(ds.Sequence(ds.Sequence(ds.Value("float32")))),
-                },
-            }
-        )
-        return ds.DatasetInfo(
-            description=_DESCRIPTION,
-            citation=_CITATION,
-            homepage=_HOMEPAGE,
-            license=_LICENSE,
-            features=features,
-        )
+    def _info(self) -> ds.Features:
+        config: CGLDatasetV2Config = self.config  # type: ignore
+        processor = config.processor
+        return processor.get_features(decode_rle=config.decode_rle)
 
     def _split_generators(
         self, dl_manager: ds.DownloadManager
