@@ -343,10 +343,17 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         CGLDatasetV2Config(version=VERSION, description=_DESCRIPTION),
     ]
 
-    def _info(self) -> ds.Features:
+    def _info(self) -> ds.DatasetInfo:
         config: CGLDatasetV2Config = self.config  # type: ignore
         processor = config.processor
-        return processor.get_features(decode_rle=config.decode_rle)
+        features = processor.get_features(decode_rle=config.decode_rle)
+        return ds.DatasetInfo(
+            description=_DESCRIPTION,
+            citation=_CITATION,
+            homepage=_HOMEPAGE,
+            license=_LICENSE,
+            features=features,
+        )
 
     def _split_generators(
         self, dl_manager: ds.DownloadManager
@@ -409,9 +416,9 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         self,
         ann_json_path: pathlib.Path,
         img_dir: pathlib.Path,
-        img_json_path: pathlib.Path,
         txt_path: pathlib.Path,
         txt_feature_dir: pathlib.Path,
+        **kwargs,
     ):
         config: CGLDatasetV2Config = self.config  # type: ignore
         processor: CGLv2Processor = config.processor
