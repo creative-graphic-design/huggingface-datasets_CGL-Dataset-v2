@@ -632,13 +632,13 @@ tqdm = ["tqdm"]
 
 [[package]]
 name = "huggingface-datasets-cocoapi-tools"
-version = "0.3.0"
+version = "0.4.0"
 description = "A helper library for easily converting MSCOCO format data using the loading script of huggingface datasets."
 optional = false
 python-versions = "<4.0,>=3.9"
 files = [
-    {file = "huggingface_datasets_cocoapi_tools-0.3.0-py3-none-any.whl", hash = "sha256:0f0ff6d71eb606126e55ce25b99169fd79e9861814dce0016fdd41b85e55514d"},
-    {file = "huggingface_datasets_cocoapi_tools-0.3.0.tar.gz", hash = "sha256:c4b384cfd67264a1313d8b65f282a4f1185038f79844ffdd2bd4db185dac6c73"},
+    {file = "huggingface_datasets_cocoapi_tools-0.4.0-py3-none-any.whl", hash = "sha256:efdd838193fd9043428337237e8dcffa1577b1623568db34e4b78ea99544bb26"},
+    {file = "huggingface_datasets_cocoapi_tools-0.4.0.tar.gz", hash = "sha256:6eee40588d1e0c0098c8b2bc21ef69e3b669be6c3e240cb6f58949541a80ab00"},
 ]
 
 [package.dependencies]
@@ -2115,17 +2115,6 @@ files = [
 
 [[package]]
 name = "typing-extensions"
-version = "4.9.0"
-description = "Backported and Experimental Type Hints for Python 3.8+"
-optional = false
-python-versions = ">=3.8"
-files = [
-    {file = "typing_extensions-4.9.0-py3-none-any.whl", hash = "sha256:af72aea155e91adfc61c3ae9e0e342dbc0cba726d6cba4b6c72c1f34e47291cd"},
-    {file = "typing_extensions-4.9.0.tar.gz", hash = "sha256:23478f88c37f27d76ac8aee6c905017a143b0b1b886c3c9f66bc2fd94f9f5783"},
-]
-
-[[package]]
-name = "typing-extensions"
 version = "4.12.2"
 description = "Backported and Experimental Type Hints for Python 3.8+"
 optional = false
@@ -2401,4 +2390,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "dca632eb0b066ff557df8ac6d14e6158f0bd55cb7b5a757c9b7d3b9857298f41"
+content-hash = "48cb1d69bf77a4470237043bf7faa32ce164b4111d40078f96349a5b6bc9a07d"
