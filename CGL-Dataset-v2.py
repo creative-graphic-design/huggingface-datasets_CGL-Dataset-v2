@@ -1,27 +1,27 @@
 import ast
-import json
 import os
 import pathlib
-from collections import defaultdict
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
+from dataclasses import dataclass
+from typing import Dict, Iterator, List, Optional, Tuple, Type, Union
 
 import datasets as ds
-import numpy as np
 import torch
 from datasets.utils.logging import get_logger
-from PIL import Image
-from PIL.Image import Image as PilImage
-from pycocotools import mask as cocomask
+from hfcocoapi.models import CategoryData, ImageData
+from hfcocoapi.processors import InstancesProcessor
+from hfcocoapi.processors.instances import InstanceExample
+from hfcocoapi.tasks import InstancesAnnotationData
+from hfcocoapi.typehint import (
+    CategoryId,
+    ImageId,
+    JsonDict,
+    PathLike,
+)
+from pydantic import BaseModel, Field, model_validator
 from tqdm import tqdm
+from typing_extensions import Self
 
 logger = get_logger(__name__)
-
-JsonDict = Dict[str, Any]
-ImageId = int
-CategoryId = int
-AnnotationId = int
-Bbox = Tuple[float, float, float, float]
 
 
 _DESCRIPTION = """\
@@ -44,174 +44,34 @@ _LICENSE = """\
 Unknown
 """
 
-
-class UncompressedRLE(TypedDict):
-    counts: List[int]
-    size: Tuple[int, int]
-
-
-class CompressedRLE(TypedDict):
-    counts: bytes
-    size: Tuple[int, int]
-
-
-@dataclass
-class ImageData(object):
-    image_id: ImageId
-    file_name: str
-    width: int
-    height: int
-
-    @classmethod
-    def from_dict(cls, json_dict: JsonDict) -> "ImageData":
-        return cls(
-            image_id=json_dict["id"],
-            file_name=json_dict["file_name"],
-            width=json_dict["width"],
-            height=json_dict["height"],
-        )
-
-    @property
-    def shape(self) -> Tuple[int, int]:
-        return (self.height, self.width)
+# The correspondence of the following category names
+# is referred to https://tianchi.aliyun.com/dataset/142692#json-file-structure
+CATEGORIES: Dict[str, str] = {
+    "Logo": "logo",
+    "文字": "text",
+    "衬底": "underlay",
+    "符号元素": "embellishment",
+    "强调突出子部分文字": "highlighted text",
+}
 
 
-@dataclass
-class CategoryData(object):
-    category_id: int
-    name: str
-    supercategory: str
-
-    @classmethod
-    def from_dict(cls, json_dict: JsonDict) -> "CategoryData":
-        return cls(
-            category_id=json_dict["id"],
-            name=json_dict["name"],
-            supercategory=json_dict["supercategory"],
-        )
-
-
-@dataclass
-class VisualAnnotationData(object):
-    annotation_id: AnnotationId
-    image_id: ImageId
-    segmentation: Union[np.ndarray, CompressedRLE]
-    area: float
-    iscrowd: bool
-    bbox: Bbox
-    category_id: int
-
-    @classmethod
-    def compress_rle(
-        cls,
-        segmentation: Union[List[List[float]], UncompressedRLE],
-        iscrowd: bool,
-        height: int,
-        width: int,
-    ) -> CompressedRLE:
-        if iscrowd:
-            rle = cocomask.frPyObjects(segmentation, h=height, w=width)
-        else:
-            rles = cocomask.frPyObjects(segmentation, h=height, w=width)
-            rle = cocomask.merge(rles)  # type: ignore
-
-        return rle  # type: ignore
-
-    @classmethod
-    def rle_segmentation_to_binary_mask(
-        cls, segmentation, iscrowd: bool, height: int, width: int
-    ) -> np.ndarray:
-        rle = cls.compress_rle(
-            segmentation=segmentation, iscrowd=iscrowd, height=height, width=width
-        )
-        return cocomask.decode(rle)  # type: ignore
-
-    @classmethod
-    def rle_segmentation_to_mask(
-        cls,
-        segmentation: Union[List[List[float]], UncompressedRLE],
-        iscrowd: bool,
-        height: int,
-        width: int,
-    ) -> np.ndarray:
-        binary_mask = cls.rle_segmentation_to_binary_mask(
-            segmentation=segmentation, iscrowd=iscrowd, height=height, width=width
-        )
-        return binary_mask * 255
-
-    @classmethod
-    def from_dict(
-        cls,
-        json_dict: JsonDict,
-        images: Dict[ImageId, ImageData],
-        decode_rle: bool,
-    ) -> "VisualAnnotationData":
-        segmentation = json_dict["segmentation"]
-        image_id = json_dict["image_id"]
-        image_data = images[image_id]
-        iscrowd = bool(json_dict["iscrowd"])
-
-        segmentation_mask = (
-            cls.rle_segmentation_to_mask(
-                segmentation=segmentation,
-                iscrowd=iscrowd,
-                height=image_data.height,
-                width=image_data.width,
-            )
-            if decode_rle
-            else cls.compress_rle(
-                segmentation=segmentation,
-                iscrowd=iscrowd,
-                height=image_data.height,
-                width=image_data.width,
-            )
-        )
-        return cls(
-            annotation_id=json_dict["id"],
-            image_id=image_id,
-            segmentation=segmentation_mask,  # type: ignore
-            area=json_dict["area"],
-            iscrowd=iscrowd,
-            bbox=json_dict["bbox"],
-            category_id=json_dict["category_id"],
-        )
-
-
-@dataclass
-class UserSelectedValue(object):
+class UserSelectedValue(BaseModel):
     name: str
 
 
-@dataclass
-class Point(object):
-    x: int
-    y: int
+class Point(BaseModel):
+    x: float
+    y: float
 
 
-@dataclass
-class TextData(object):
-    user_selected_value: UserSelectedValue
-    category_description: str
+class TextData(BaseModel):
+    user_selected_value: UserSelectedValue = Field(alias="userSelectedValue")
+    category_description: str = Field(alias="categoryDesc")
     points: List[Point]
 
-    @classmethod
-    def from_dict(cls, json_dict: JsonDict) -> "TextData":
-        return cls(
-            user_selected_value=UserSelectedValue(**json_dict["userSelectedValue"]),
-            points=[Point(**p) for p in json_dict["points"]],
-            category_description=json_dict["categoryDesc"],
-        )
 
-
-class TextAnnotationData(object):
-    @classmethod
-    def from_dict(cls, *args, **kwargs):
-        raise NotImplementedError
-
-
-@dataclass
-class TextAnnotationTrainData(TextAnnotationData):
-    is_sample: bool
+class TextAnnotationTrainData(BaseModel):
+    is_sample: bool = Field(alias="isSample")
     image: str
     rotate: float
     data: List[TextData]
@@ -225,200 +85,295 @@ class TextAnnotationTrainData(TextAnnotationData):
         root, _ = os.path.splitext(id_filename)
         return int(root)
 
-    @classmethod
-    def from_dict(cls, json_dict: JsonDict) -> "TextAnnotationTrainData":
-        text_data = [TextData.from_dict(d) for d in json_dict["data"]]
-        return cls(
-            is_sample=bool(int(json_dict["isSample"])),
-            image=json_dict["image"],
-            rotate=json_dict["rotate"],
-            pin=json_dict["pin"],
-            data=text_data,
-        )
 
-
-@dataclass
-class TextAnnotationTestData(TextAnnotationData):
+class TextAnnotationTestData(BaseModel):
     image_filename: str
-    product_detail_highlighted_word: Optional[List[str]] = None
+    product_detail_highlighted_word: Optional[List[str]] = Field(
+        default=None, alias="productDetailHighlightWord"
+    )
     blc_text: Optional[List[str]] = None
     adv_sellpoint: Optional[List[str]] = None
 
-    @classmethod
-    def from_dict(
-        cls, image_filename: str, json_dict: JsonDict
-    ) -> "TextAnnotationTestData":
-        return cls(
-            image_filename=image_filename,
-            product_detail_highlighted_word=json_dict.get("productDetailHighlightWord"),
-            blc_text=json_dict.get("blc_text"),
-            adv_sellpoint=json_dict.get("adv_sellpoint"),
-        )
 
-
-@dataclass
-class TextFeatureData(object):
-    feats: List[torch.Tensor]
+class TextFeatureData(BaseModel):
+    feats: List[List[List[float]]]
     num: Optional[int] = None
-    pos: Optional[List[Tuple[int, int, int, int]]] = None
+    pos: Optional[List[Tuple[float, float, float, float]]] = None
 
-    def __post_init__(self):
+    @model_validator(mode="after")
+    def check_num_field(self) -> Self:
         if self.num is None:
             self.num = len(self.feats)
 
         assert self.num == len(self.feats)
+        return self
 
+    @model_validator(mode="after")
+    def check_pos_field(self) -> Self:
         if self.pos:
             assert self.num == len(self.pos) == len(self.feats)
+        return self
 
 
-def load_json(json_path: pathlib.Path) -> JsonDict:
-    logger.info(f"Load from {json_path}")
-    with json_path.open("r") as rf:
-        json_dict = json.load(rf)
-    return json_dict
+class CGLv2Processor(InstancesProcessor):
+    def get_features_base_dict(self):
+        return {
+            "image_id": ds.Value("int64"),
+            "file_name": ds.Value("string"),
+            "width": ds.Value("int64"),
+            "height": ds.Value("int64"),
+            "image": ds.Image(),
+        }
 
+    def get_features_instance_dict(self, decode_rle: bool, rename_category_names: bool):
+        category_names = (
+            list(CATEGORIES.values())
+            if rename_category_names
+            else list(CATEGORIES.keys())
+        )
+        segmentation_feature = (
+            ds.Image()
+            if decode_rle
+            else {
+                "counts": ds.Value("binary"),
+                "size": ds.Sequence(ds.Value("int32")),
+            }
+        )
+        return {
+            "annotation_id": ds.Value("int64"),
+            "area": ds.Value("int64"),
+            "bbox": ds.Sequence(ds.Value("int64")),
+            "category": {
+                "category_id": ds.Value("int64"),
+                "name": ds.ClassLabel(
+                    num_classes=len(category_names), names=category_names
+                ),
+                "supercategory": ds.Value("string"),
+            },
+            "category_id": ds.Value("int64"),
+            "image_id": ds.Value("int64"),
+            "iscrowd": ds.Value("bool"),
+            "segmentation": segmentation_feature,
+        }
 
-def load_image(image_path: pathlib.Path) -> PilImage:
-    logger.info(f"Load from {image_path}")
-    return Image.open(image_path)
+    def get_features_text_annotations_dict(self):
+        return {
+            "is_sample": ds.Value("bool"),
+            "image": ds.Value("string"),
+            "rotate": ds.Value("float32"),
+            "pin": ds.Value("string"),
+            "data": ds.Sequence(
+                {
+                    "category_description": ds.Value("string"),
+                    "points": ds.Sequence(
+                        {
+                            "x": ds.Value("int64"),
+                            "y": ds.Value("int64"),
+                        }
+                    ),
+                    "user_selected_value": {
+                        "name": ds.Value("string"),
+                    },
+                }
+            ),
+            "product_detail_highlighted_word": ds.Sequence(ds.Value("string")),
+            "blc_text": ds.Sequence(ds.Value("string")),
+            "adv_sellpoint": ds.Sequence(ds.Value("string")),
+        }
 
+    def get_features_text_features_dict(self):
+        return {
+            "num": ds.Value("int64"),
+            "pos": ds.Sequence(ds.Sequence(ds.Value("int64"))),
+            "feats": ds.Sequence(ds.Sequence(ds.Sequence(ds.Value("float32")))),
+        }
 
-def load_images_data(
-    image_dicts: List[JsonDict],
-    tqdm_desc="Load images",
-) -> Dict[ImageId, ImageData]:
-    images = {}
-    for image_dict in tqdm(image_dicts, desc=tqdm_desc):
-        image_data = ImageData.from_dict(image_dict)
-        images[image_data.image_id] = image_data
-    return images
+    def get_features(
+        self, decode_rle: bool, rename_category_names: bool
+    ) -> ds.Features:
+        features_dict = self.get_features_base_dict()
+        annotations = ds.Sequence(
+            self.get_features_instance_dict(
+                decode_rle=decode_rle, rename_category_names=rename_category_names
+            )
+        )
+        text_annotations = self.get_features_text_annotations_dict()
+        text_features = self.get_features_text_features_dict()
+        features_dict.update(
+            {
+                "annotations": annotations,
+                "text_annotations": text_annotations,
+                "text_features": text_features,
+            }
+        )
+        return ds.Features(features_dict)
 
+    def _load_train_texts_data(
+        self,
+        txt_path: pathlib.Path,
+        image_dicts: List[JsonDict],
+        tqdm_desc: str = "Load text annotations for training",
+    ) -> Dict[ImageId, TextAnnotationTrainData]:
+        assert txt_path.stem == "train", txt_path
 
-def load_categories_data(
-    category_dicts: List[JsonDict],
-    tqdm_desc: str = "Load categories",
-) -> Dict[CategoryId, CategoryData]:
-    categories = {}
-    for category_dict in tqdm(category_dicts, desc=tqdm_desc):
-        category_data = CategoryData.from_dict(category_dict)
-        categories[category_data.category_id] = category_data
-    return categories
+        texts: Dict[ImageId, TextAnnotationTrainData] = {}
+        with txt_path.open("r") as rf:
+            for line in tqdm(rf, desc=tqdm_desc):
+                text_dict = ast.literal_eval(line)
+                text_data_ann = TextAnnotationTrainData(**text_dict)
+                image_dict = image_dicts[text_data_ann.id_images]
+                image_id = image_dict["id"]
 
+                if image_id in texts:
+                    raise ValueError(f"Duplicate image id: {image_id}")
 
-def _load_train_texts_data(
-    txt_path: pathlib.Path,
-    image_dicts: List[JsonDict],
-    tqdm_desc: str = "Load text annotations for training",
-) -> Dict[ImageId, TextAnnotationTrainData]:
-    assert txt_path.stem == "train", txt_path
+                texts[image_id] = text_data_ann
+        return texts
 
-    texts: Dict[ImageId, TextAnnotationTrainData] = {}
-    with txt_path.open("r") as rf:
-        for line in tqdm(rf, desc=tqdm_desc):
-            text_dict = ast.literal_eval(line)
-            text_data_ann = TextAnnotationTrainData.from_dict(text_dict)
-            image_dict = image_dicts[text_data_ann.id_images]
+    def _load_test_texts_data(
+        self,
+        txt_path: pathlib.Path,
+        images: Dict[ImageId, ImageData],
+        tqdm_desc: str = "Load text annotations for test",
+    ) -> Dict[ImageId, TextAnnotationTestData]:
+        assert txt_path.stem == "test", txt_path
+        images_dict = {image.file_name: image for image in images.values()}
+
+        texts = {}
+        with txt_path.open("r") as rf:
+            for line in tqdm(rf, desc=tqdm_desc):
+                image_filename, json_str = line.split("\t")
+                text_dict = ast.literal_eval(json_str)
+                text_data_ann = TextAnnotationTestData(
+                    image_filename=image_filename, **text_dict
+                )
+                image_id = images_dict[image_filename].image_id
+                if image_id in texts:
+                    raise ValueError(f"Duplicate image id: {image_id}")
+
+                texts[image_id] = text_data_ann
+        return texts
+
+    def load_categories_data(
+        self,
+        category_dicts: List[JsonDict],
+        category_data_class: Type[CategoryData] = CategoryData,
+        tqdm_desc: str = "Load categories",
+        rename_category_names: bool = False,
+    ) -> Dict[CategoryId, CategoryData]:
+        categories = {}
+        for cat_dict in tqdm(category_dicts, desc=tqdm_desc):
+            if rename_category_names:
+                cat_dict["name"] = CATEGORIES[cat_dict["name"]]
+                cat_dict["supercategory"] = CATEGORIES[cat_dict["supercategory"]]
+
+            category_data = category_data_class(**cat_dict)
+            categories[category_data.category_id] = category_data
+        return categories
+
+    def load_texts_data(
+        self,
+        txt_path: pathlib.Path,
+        image_dicts: List[JsonDict],
+        images: Dict[ImageId, ImageData],
+    ) -> Union[
+        Dict[ImageId, TextAnnotationTrainData], Dict[ImageId, TextAnnotationTestData]
+    ]:
+        if txt_path.stem == "train":
+            return self._load_train_texts_data(
+                txt_path=txt_path,
+                image_dicts=image_dicts,
+            )
+        elif txt_path.stem == "test":
+            return self._load_test_texts_data(
+                txt_path=txt_path,
+                images=images,
+            )
+        else:
+            raise ValueError(f"Unknown text file: {txt_path}")
+
+    def load_text_features(
+        self,
+        txt_feature_dir: pathlib.Path,
+        image_dicts: List[JsonDict],
+        tqdm_desc="Load text features",
+    ) -> Dict[ImageId, TextFeatureData]:
+        text_features = {}
+        for image_dict in tqdm(image_dicts, desc=tqdm_desc):
+            image_filename = image_dict["file_name"]
+            root, _ = os.path.splitext(image_filename)
+            txt_feature_path = txt_feature_dir / f"{root}_feats.pth"
+
+            if not txt_feature_path.exists():
+                # logger.warning(f"Text feature file not found: {txt_feature_path}")
+                continue
+
+            txt_feature_dict = torch.load(
+                txt_feature_path, map_location=torch.device("cpu")
+            )
+            txt_feature_dict["feats"] = [
+                f.numpy().tolist() for f in txt_feature_dict["feats"]
+            ]
+            txt_feature_data = TextFeatureData(**txt_feature_dict)
+
             image_id = image_dict["id"]
-
-            if image_id in texts:
+            if image_id in text_features:
                 raise ValueError(f"Duplicate image id: {image_id}")
 
-            texts[image_id] = text_data_ann
-    return texts
+            text_features[image_id] = txt_feature_data
+        return text_features
 
+    def generate_examples(  # type: ignore[override]
+        self,
+        image_dir: PathLike,
+        images: Dict[ImageId, ImageData],
+        annotations: Dict[ImageId, List[InstancesAnnotationData]],
+        categories: Dict[CategoryId, CategoryData],
+        texts: Union[
+            Dict[ImageId, TextAnnotationTrainData],
+            Dict[ImageId, TextAnnotationTestData],
+        ],
+        text_features: Optional[Dict[ImageId, TextFeatureData]] = None,
+    ) -> Iterator[Tuple[int, InstanceExample]]:
+        for idx, image_id in enumerate(images.keys()):
+            image_data = images[image_id]
+            image_anns = annotations[image_id]
 
-def _load_test_texts_data(
-    txt_path: pathlib.Path,
-    images: Dict[ImageId, ImageData],
-    tqdm_desc: str = "Load text annotations for test",
-) -> Dict[ImageId, TextAnnotationTestData]:
-    assert txt_path.stem == "test", txt_path
-    images_dict = {image.file_name: image for image in images.values()}
+            if len(image_anns) < 1:
+                logger.warning(f"No annotation found for image id: {image_id}.")
+                continue
 
-    texts = {}
-    with txt_path.open("r") as rf:
-        for line in tqdm(rf, desc=tqdm_desc):
-            image_filename, json_str = line.split("\t")
-            text_dict = ast.literal_eval(json_str)
-            text_data_ann = TextAnnotationTestData.from_dict(image_filename, text_dict)
+            image = self.load_image(
+                image_path=os.path.join(image_dir, image_data.file_name),
+            )
+            example = image_data.model_dump()
+            example["image"] = image
 
-            image_id = images_dict[image_filename].image_id
-            if image_id in texts:
-                raise ValueError(f"Duplicate image id: {image_id}")
+            text_data = texts.get(image_id)
+            example["text_annotations"] = text_data.model_dump() if text_data else None
 
-            texts[image_id] = text_data_ann
-    return texts
+            if text_features is not None:
+                text_feature = text_features.get(image_id)
+                example["text_features"] = (
+                    text_feature.model_dump() if text_feature else None
+                )
 
+            example["annotations"] = []
+            for ann in image_anns:
+                ann_dict = ann.model_dump()
+                category = categories[ann.category_id]
+                ann_dict["category"] = category.model_dump()
+                example["annotations"].append(ann_dict)
 
-def load_texts_data(
-    txt_path: pathlib.Path,
-    image_dicts: List[JsonDict],
-    images: Dict[ImageId, ImageData],
-):
-    if txt_path.stem == "train":
-        return _load_train_texts_data(
-            txt_path=txt_path,
-            image_dicts=image_dicts,
-        )
-    elif txt_path.stem == "test":
-        return _load_test_texts_data(
-            txt_path=txt_path,
-            images=images,
-        )
-    else:
-        raise ValueError(f"Unknown text file: {txt_path}")
-
-
-def load_annotation_data(
-    label_dicts: List[JsonDict],
-    images: Dict[ImageId, ImageData],
-    decode_rle: bool,
-    tqdm_desc: str = "Load annotation data",
-) -> Dict[ImageId, List[VisualAnnotationData]]:
-    labels = defaultdict(list)
-    label_dicts = sorted(label_dicts, key=lambda d: d["image_id"])
-
-    for label_dict in tqdm(label_dicts, desc=tqdm_desc):
-        label_data = VisualAnnotationData.from_dict(
-            label_dict, images=images, decode_rle=decode_rle
-        )
-        labels[label_data.image_id].append(label_data)
-    return labels
-
-
-def load_text_features(
-    txt_feature_dir: pathlib.Path,
-    image_dicts: List[JsonDict],
-    tqdm_desc="Load text features",
-) -> Dict[ImageId, TextFeatureData]:
-    text_features = {}
-    for image_dict in tqdm(image_dicts):
-        image_filename = image_dict["file_name"]
-        root, _ = os.path.splitext(image_filename)
-        txt_feature_path = txt_feature_dir / f"{root}_feats.pth"
-
-        if not txt_feature_path.exists():
-            # logger.warning(f"Text feature file not found: {txt_feature_path}")
-            continue
-
-        txt_feature_dict = torch.load(
-            txt_feature_path, map_location=torch.device("cpu")
-        )
-        txt_feature_data = TextFeatureData(**txt_feature_dict)
-
-        image_id = image_dict["id"]
-        if image_id in text_features:
-            raise ValueError(f"Duplicate image id: {image_id}")
-
-        text_features[image_id] = txt_feature_data
-    return text_features
+            yield idx, example  # type: ignore
 
 
 @dataclass
 class CGLDatasetV2Config(ds.BuilderConfig):
     decode_rle: bool = False
     include_text_features: bool = False
+    rename_category_names: bool = False
+    processor: CGLv2Processor = CGLv2Processor()
 
 
 class CGLDatasetV2(ds.GeneratorBasedBuilder):
@@ -429,61 +384,11 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
     ]
 
     def _info(self) -> ds.DatasetInfo:
-        segmentation_feature = (
-            ds.Image()
-            if self.config.decode_rle  # type: ignore
-            else {
-                "counts": ds.Value("binary"),
-                "size": ds.Sequence(ds.Value("int32")),
-            }
-        )
-        features = ds.Features(
-            {
-                "image_id": ds.Value("int64"),
-                "file_name": ds.Value("string"),
-                "width": ds.Value("int64"),
-                "height": ds.Value("int64"),
-                "image": ds.Image(),
-                "annotations": ds.Sequence(
-                    {
-                        "annotation_id": ds.Value("int64"),
-                        "area": ds.Value("int64"),
-                        "bbox": ds.Sequence(ds.Value("int64")),
-                        "category": {
-                            "category_id": ds.Value("int64"),
-                            "name": ds.Value("string"),
-                            "supercategory": ds.Value("string"),
-                        },
-                        "category_id": ds.Value("int64"),
-                        "image_id": ds.Value("int64"),
-                        "iscrowd": ds.Value("bool"),
-                        "segmentation": segmentation_feature,
-                    }
-                ),
-                "text_annotation": {
-                    "is_sample": ds.Value("bool"),
-                    "image": ds.Value("string"),
-                    "rotate": ds.Value("float32"),
-                    "pin": ds.Value("string"),
-                    "data": ds.Sequence(
-                        {
-                            "category_description": ds.Value("string"),
-                            "points": ds.Sequence(
-                                {"x": ds.Value("int64"), "y": ds.Value("int64")}
-                            ),
-                            "user_selected_value": {"name": ds.Value("string")},
-                        }
-                    ),
-                    "product_detail_highlighted_word": ds.Sequence(ds.Value("string")),
-                    "blc_text": ds.Sequence(ds.Value("string")),
-                    "adv_sellpoint": ds.Sequence(ds.Value("string")),
-                },
-                "text_feature": {
-                    "num": ds.Value("int64"),
-                    "pos": ds.Sequence(ds.Sequence(ds.Value("int64"))),
-                    "feats": ds.Sequence(ds.Sequence(ds.Sequence(ds.Value("float32")))),
-                },
-            }
+        config: CGLDatasetV2Config = self.config  # type: ignore
+        processor = config.processor
+        features = processor.get_features(
+            decode_rle=config.decode_rle,
+            rename_category_names=config.rename_category_names,
         )
         return ds.DatasetInfo(
             description=_DESCRIPTION,
@@ -554,52 +459,44 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         self,
         ann_json_path: pathlib.Path,
         img_dir: pathlib.Path,
-        img_json_path: pathlib.Path,
         txt_path: pathlib.Path,
         txt_feature_dir: pathlib.Path,
+        **kwargs,
     ):
-        ann_json = load_json(ann_json_path)
-        images = load_images_data(image_dicts=ann_json["images"])
-        categories = load_categories_data(category_dicts=ann_json["categories"])
+        config: CGLDatasetV2Config = self.config  # type: ignore
+        processor: CGLv2Processor = config.processor
 
-        texts = load_texts_data(
+        ann_json = processor.load_annotation_json(
+            ann_file_path=ann_json_path,
+        )
+        images = processor.load_images_data(
+            image_dicts=ann_json["images"],
+        )
+        categories = processor.load_categories_data(
+            category_dicts=ann_json["categories"],
+        )
+        texts = processor.load_texts_data(
             txt_path=txt_path, image_dicts=ann_json["images"], images=images
         )
-
         text_features = (
-            load_text_features(
-                txt_feature_dir=txt_feature_dir, image_dicts=ann_json["images"]
+            processor.load_text_features(
+                txt_feature_dir=txt_feature_dir,
+                image_dicts=ann_json["images"],
             )
-            if self.config.include_text_features  # type: ignore
+            if config.include_text_features  # type: ignore
             else None
         )
-
-        annotations = load_annotation_data(
-            label_dicts=ann_json["annotations"],
+        annotations = processor.load_data(
+            ann_dicts=ann_json["annotations"],
             images=images,
-            decode_rle=self.config.decode_rle,  # type: ignore
+            decode_rle=config.decode_rle,
         )
 
-        for idx, image_id in enumerate(images.keys()):
-            image_data = images[image_id]
-            image_anns = annotations[image_id]
-
-            image = load_image(image_path=img_dir / image_data.file_name)
-            example = asdict(image_data)
-            example["image"] = image
-
-            example["annotations"] = []
-            for ann in image_anns:
-                ann_dict = asdict(ann)
-                category = categories[ann.category_id]
-                ann_dict["category"] = asdict(category)
-                example["annotations"].append(ann_dict)
-
-            text_data = texts.get(image_id)
-            example["text_annotation"] = asdict(text_data) if text_data else None  # type: ignore
-
-            if text_features:
-                text_feature = text_features.get(image_id)
-                example["text_feature"] = asdict(text_feature) if text_feature else None
-
-            yield idx, example
+        yield from processor.generate_examples(
+            image_dir=img_dir,
+            images=images,
+            annotations=annotations,
+            categories=categories,
+            texts=texts,
+            text_features=text_features,
+        )

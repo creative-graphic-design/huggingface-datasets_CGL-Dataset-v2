@@ -30,19 +30,15 @@ jobs:
 
       - name: Format
         run: |
-          poetry run black --check .
+          poetry run ruff format --check --diff .
 
       - name: Lint
         run: |
-          poetry run ruff .
+          poetry run ruff check --output-format=github .
 
       - name: Type check
         run: |
-          poetry run mypy . \
-            --ignore-missing-imports \
-            --no-strict-optional \
-            --no-site-packages \
-            --cache-dir=/dev/null
+          poetry run mypy .
 
       - name: Run tests
         run: |

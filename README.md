@@ -82,7 +82,7 @@ The language data in CGL-Dataset v2 is in Chinese ([BCP-47 zh](https://www.rfc-e
 
 ### Data Instances
 
-To use CGL-Dataset v2 dataset, you need to download `RADM_dataset.tar.gz` that includes the poster image, text and text features via [JD Cloud](https://3.cn/10-dQKDKG) or [Google Drive](https://drive.google.com/file/d/1ezOzR7MX3MFFIfWgJmmEaqXn3iDFp2si/view?usp=sharing).
+<!-- To use CGL-Dataset v2 dataset, you need to download `RADM_dataset.tar.gz` that includes the poster image, text and text features via [JD Cloud](https://3.cn/10-dQKDKG) or [Google Drive](https://drive.google.com/file/d/1ezOzR7MX3MFFIfWgJmmEaqXn3iDFp2si/view?usp=sharing).
 Then place the downloaded files in the following structure and specify its path.
 
 ```shell
@@ -99,7 +99,14 @@ dataset = ds.load_dataset(
     decode_rle=True, # True if Run-length Encoding (RLE) is to be decoded and converted to binary mask.
     include_text_features=True, # True if RoBERTa-based text feature is to be loaded.
 )
+``` -->
+
+```python
+import datasets as ds
+
+dataset = ds.load_dataset("creative-graphic-design/CGL-Dataset-v2")
 ```
+
 
 ### Data Fields
 
@@ -130,15 +137,17 @@ Provide the sizes of each split. As appropriate, provide any descriptive statist
 
 ### Curation Rationale
 
-[More Information Needed]
-
-<!-- What need motivated the creation of this dataset? What are some of the reasons underlying the major choices involved in putting it together? -->
+The CGL-Dataset V2 was curated to address the limitations of previous datasets and to support the development of advanced models for automatic poster layout generation. By incorporating text content annotations and creating clean background images, the dataset enables the generation of high-quality, visually balanced, and informative poster layouts. This dataset is a significant contribution to the field, facilitating research and development in automatic graphic design.
 
 ### Source Data
 
 [More Information Needed]
 
 <!-- This section describes the source data (e.g. news text and headlines, social media posts, translated sentences,...) -->
+
+- Poster Images: The dataset contains a large collection of poster images specifically designed for advertising purposes. These images are annotated with various graphic elements such as logos, texts, underlays, and embellishments.
+- Textual Content: The textual content primarily focuses on promotional slogans and descriptions relevant to the e-commerce field. This content is crucial for studying the influence of text on poster layout design.
+- Element Annotations: Each poster image is annotated with detailed information about the graphic elements, including their categories and coordinates. This helps in understanding the spatial relationships between different elements on the poster.
 
 #### Initial Data Collection and Normalization
 
