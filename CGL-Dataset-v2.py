@@ -2,7 +2,7 @@ import ast
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Annotated, Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Tuple, Type, Union
 
 import datasets as ds
 import torch
@@ -11,16 +11,17 @@ from hfcocoapi.models import CategoryData, ImageData
 from hfcocoapi.processors import InstancesProcessor
 from hfcocoapi.processors.instances import InstanceExample
 from hfcocoapi.tasks import InstancesAnnotationData
-from hfcocoapi.typehint import CategoryId, ImageId, PathLike
+from hfcocoapi.typehint import (
+    CategoryId,
+    ImageId,
+    JsonDict,
+    PathLike,
+)
 from pydantic import BaseModel, Field, model_validator
 from tqdm import tqdm
 from typing_extensions import Self
 
 logger = get_logger(__name__)
-
-JsonDict = Dict[str, Any]
-AnnotationId = Annotated[int, "Annotation ID"]
-Bbox = Tuple[float, float, float, float]
 
 
 _DESCRIPTION = """\
@@ -42,6 +43,16 @@ _HOMEPAGE = "https://github.com/liuan0803/RADM"
 _LICENSE = """\
 Unknown
 """
+
+# The correspondence of the following category names
+# is referred to https://tianchi.aliyun.com/dataset/142692#json-file-structure
+CATEGORIES: Dict[str, str] = {
+    "Logo": "logo",
+    "文字": "text",
+    "衬底": "underlay",
+    "符号元素": "embellishment",
+    "强调突出子部分文字": "highlighted text",
+}
 
 
 class UserSelectedValue(BaseModel):
@@ -114,7 +125,12 @@ class CGLv2Processor(InstancesProcessor):
             "image": ds.Image(),
         }
 
-    def get_features_instance_dict(self, decode_rle: bool):
+    def get_features_instance_dict(self, decode_rle: bool, rename_category_names: bool):
+        category_names = (
+            list(CATEGORIES.values())
+            if rename_category_names
+            else list(CATEGORIES.keys())
+        )
         segmentation_feature = (
             ds.Image()
             if decode_rle
@@ -129,7 +145,9 @@ class CGLv2Processor(InstancesProcessor):
             "bbox": ds.Sequence(ds.Value("int64")),
             "category": {
                 "category_id": ds.Value("int64"),
-                "name": ds.Value("string"),
+                "name": ds.ClassLabel(
+                    num_classes=len(category_names), names=category_names
+                ),
                 "supercategory": ds.Value("string"),
             },
             "category_id": ds.Value("int64"),
@@ -170,10 +188,14 @@ class CGLv2Processor(InstancesProcessor):
             "feats": ds.Sequence(ds.Sequence(ds.Sequence(ds.Value("float32")))),
         }
 
-    def get_features(self, decode_rle: bool) -> ds.Features:
+    def get_features(
+        self, decode_rle: bool, rename_category_names: bool
+    ) -> ds.Features:
         features_dict = self.get_features_base_dict()
         annotations = ds.Sequence(
-            self.get_features_instance_dict(decode_rle=decode_rle)
+            self.get_features_instance_dict(
+                decode_rle=decode_rle, rename_category_names=rename_category_names
+            )
         )
         text_annotations = self.get_features_text_annotations_dict()
         text_features = self.get_features_text_features_dict()
@@ -231,6 +253,23 @@ class CGLv2Processor(InstancesProcessor):
 
                 texts[image_id] = text_data_ann
         return texts
+
+    def load_categories_data(
+        self,
+        category_dicts: List[JsonDict],
+        category_data_class: Type[CategoryData] = CategoryData,
+        tqdm_desc: str = "Load categories",
+        rename_category_names: bool = False,
+    ) -> Dict[CategoryId, CategoryData]:
+        categories = {}
+        for cat_dict in tqdm(category_dicts, desc=tqdm_desc):
+            if rename_category_names:
+                cat_dict["name"] = CATEGORIES[cat_dict["name"]]
+                cat_dict["supercategory"] = CATEGORIES[cat_dict["supercategory"]]
+
+            category_data = category_data_class(**cat_dict)
+            categories[category_data.category_id] = category_data
+        return categories
 
     def load_texts_data(
         self,
@@ -311,11 +350,11 @@ class CGLv2Processor(InstancesProcessor):
             example["image"] = image
 
             text_data = texts.get(image_id)
-            example["text_annotation"] = text_data.model_dump() if text_data else None
+            example["text_annotations"] = text_data.model_dump() if text_data else None
 
             if text_features is not None:
                 text_feature = text_features.get(image_id)
-                example["text_feature"] = (
+                example["text_features"] = (
                     text_feature.model_dump() if text_feature else None
                 )
 
@@ -333,6 +372,7 @@ class CGLv2Processor(InstancesProcessor):
 class CGLDatasetV2Config(ds.BuilderConfig):
     decode_rle: bool = False
     include_text_features: bool = False
+    rename_category_names: bool = False
     processor: CGLv2Processor = CGLv2Processor()
 
 
@@ -346,7 +386,10 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
     def _info(self) -> ds.DatasetInfo:
         config: CGLDatasetV2Config = self.config  # type: ignore
         processor = config.processor
-        features = processor.get_features(decode_rle=config.decode_rle)
+        features = processor.get_features(
+            decode_rle=config.decode_rle,
+            rename_category_names=config.rename_category_names,
+        )
         return ds.DatasetInfo(
             description=_DESCRIPTION,
             citation=_CITATION,
@@ -440,7 +483,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
                 txt_feature_dir=txt_feature_dir,
                 image_dicts=ann_json["images"],
             )
-            if self.config.include_text_features  # type: ignore
+            if config.include_text_features  # type: ignore
             else None
         )
         annotations = processor.load_data(
