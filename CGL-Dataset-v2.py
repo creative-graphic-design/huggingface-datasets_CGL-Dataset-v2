@@ -257,9 +257,9 @@ class CGLv2Processor(InstancesProcessor):
     def load_categories_data(
         self,
         category_dicts: List[JsonDict],
+        rename_category_names: bool,
         category_data_class: Type[CategoryData] = CategoryData,
         tqdm_desc: str = "Load categories",
-        rename_category_names: bool = False,
     ) -> Dict[CategoryId, CategoryData]:
         categories = {}
         for cat_dict in tqdm(category_dicts, desc=tqdm_desc):
@@ -474,6 +474,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         )
         categories = processor.load_categories_data(
             category_dicts=ann_json["categories"],
+            rename_category_names=config.rename_category_names,
         )
         texts = processor.load_texts_data(
             txt_path=txt_path, image_dicts=ann_json["images"], images=images
