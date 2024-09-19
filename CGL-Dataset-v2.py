@@ -44,6 +44,14 @@ _LICENSE = """\
 Unknown
 """
 
+_URLS = {
+    "v2": "https://huggingface.co/datasets/shunk031-private/RADM-private/resolve/main/RADM_dataset.tar.gz",
+    "v1": [
+        "https://huggingface.co/datasets/shunk031-private/CGL-Dataset-private/resolve/main/layout_imgs_6w_1.zip",
+        "https://huggingface.co/datasets/shunk031-private/CGL-Dataset-private/resolve/main/layout_imgs_6w_2.zip",
+    ],
+}
+
 # The correspondence of the following category names
 # is referred to https://tianchi.aliyun.com/dataset/142692#json-file-structure
 CATEGORIES: Dict[str, str] = {
@@ -116,14 +124,24 @@ class TextFeatureData(BaseModel):
 
 
 class CGLv2Processor(InstancesProcessor):
-    def get_features_base_dict(self):
-        return {
+    def get_features_base_dict(self, is_ralf_style: bool):
+        base_features = {
             "image_id": ds.Value("int64"),
             "file_name": ds.Value("string"),
             "width": ds.Value("int64"),
             "height": ds.Value("int64"),
-            "image": ds.Image(),
         }
+        image_features = (
+            {
+                "original_poster": ds.Image(),
+                "inpainted_poster": ds.Image(),
+            }
+            if is_ralf_style
+            else {
+                "image": ds.Image(),
+            }
+        )
+        return {**base_features, **image_features}
 
     def get_features_instance_dict(self, decode_rle: bool, rename_category_names: bool):
         category_names = (
@@ -189,9 +207,9 @@ class CGLv2Processor(InstancesProcessor):
         }
 
     def get_features(
-        self, decode_rle: bool, rename_category_names: bool
+        self, decode_rle: bool, rename_category_names: bool, is_ralf_style: bool
     ) -> ds.Features:
-        features_dict = self.get_features_base_dict()
+        features_dict = self.get_features_base_dict(is_ralf_style)
         annotations = ds.Sequence(
             self.get_features_instance_dict(
                 decode_rle=decode_rle, rename_category_names=rename_category_names
@@ -334,6 +352,7 @@ class CGLv2Processor(InstancesProcessor):
             Dict[ImageId, TextAnnotationTestData],
         ],
         text_features: Optional[Dict[ImageId, TextFeatureData]] = None,
+        v1_image_files: Optional[Dict[str, pathlib.Path]] = None,
     ) -> Iterator[Tuple[int, InstanceExample]]:
         for idx, image_id in enumerate(images.keys()):
             image_data = images[image_id]
@@ -343,11 +362,22 @@ class CGLv2Processor(InstancesProcessor):
                 logger.warning(f"No annotation found for image id: {image_id}.")
                 continue
 
-            image = self.load_image(
+            example = image_data.model_dump()
+
+            if v1_image_files is not None:
+                v1_file_name = restore_v1_filename(image_data.file_name)
+                v1_file_path = v1_image_files.get(v1_file_name)
+
+                if v1_file_path is not None:
+                    original_poster = self.load_image(
+                        image_path=v1_image_files[v1_file_name]
+                    )
+                    example["original_poster"] = original_poster
+
+            inpainted_image = self.load_image(
                 image_path=os.path.join(image_dir, image_data.file_name),
             )
-            example = image_data.model_dump()
-            example["image"] = image
+            example["inpainted_poster"] = inpainted_image
 
             text_data = texts.get(image_id)
             example["text_annotations"] = text_data.model_dump() if text_data else None
@@ -368,6 +398,40 @@ class CGLv2Processor(InstancesProcessor):
             yield idx, example  # type: ignore
 
 
+def get_v1_image_file_paths(
+    image_dirs: List[pathlib.Path],
+) -> Dict[str, pathlib.Path]:
+    image_file_paths: Dict[str, pathlib.Path] = {}
+
+    for image_dir in image_dirs:
+        jpg_files = list(image_dir.glob("**/*.jpg"))
+        png_files = list(image_dir.glob("**/*.png"))
+        image_files = jpg_files + png_files
+        for image_file in image_files:
+            assert image_file.name not in image_file_paths, image_file
+            image_file_paths[image_file.name] = image_file
+
+    return image_file_paths
+
+
+def restore_v1_filename(file_name):
+    # Restore the file name of the CGL dataset from the file name of the CGL v2 dataset
+    # e.g.: 'O1CN01HnK3zH1HoH7oxbsE5_!!3409010804-0-alimamazszw_mask002.jpg'
+    # -> 'O1CN01HnK3zH1HoH7oxbsE5_!!3409010804-0-alimamazszw.jpg'
+
+    # ('O1CN01HnK3zH1HoH7oxbsE5_!!3409010804-0-alimamazszw_mask002', '.jpg')
+    root, ext = os.path.splitext(file_name)
+
+    # ['O1CN01HnK3zH1HoH7oxbsE5', '!!3409010804-0-alimamazszw', 'mask002']
+    roots = root.split("_")
+
+    # O1CN01HnK3zH1HoH7oxbsE5_!!3409010804-0-alimamazszw
+    root = "_".join(roots[:2])
+
+    # O1CN01HnK3zH1HoH7oxbsE5_!!3409010804-0-alimamazszw.jpg
+    return f"{root}{ext}"
+
+
 @dataclass
 class CGLDatasetV2Config(ds.BuilderConfig):
     decode_rle: bool = False
@@ -380,7 +444,8 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
     VERSION = ds.Version("1.0.0")
     BUILDER_CONFIG_CLASS = CGLDatasetV2Config
     BUILDER_CONFIGS = [
-        CGLDatasetV2Config(version=VERSION, description=_DESCRIPTION),
+        CGLDatasetV2Config(name="default", version=VERSION, description=_DESCRIPTION),
+        CGLDatasetV2Config(name="ralf", version=VERSION, description=_DESCRIPTION),
     ]
 
     def _info(self) -> ds.DatasetInfo:
@@ -389,6 +454,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         features = processor.get_features(
             decode_rle=config.decode_rle,
             rename_category_names=config.rename_category_names,
+            is_ralf_style=config.name == "ralf",
         )
         return ds.DatasetInfo(
             description=_DESCRIPTION,
@@ -401,13 +467,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
     def _split_generators(
         self, dl_manager: ds.DownloadManager
     ) -> List[ds.SplitGenerator]:
-        assert dl_manager.manual_dir is not None
-        base_dir_path = os.path.expanduser(dl_manager.manual_dir)
-
-        if not os.path.exists(base_dir_path):
-            raise FileNotFoundError()
-
-        base_dir_path = dl_manager.extract(base_dir_path)
+        base_dir_path = dl_manager.download_and_extract(_URLS["v2"])
         assert isinstance(base_dir_path, str)
 
         dir_path = pathlib.Path(base_dir_path) / "RADM_dataset"
@@ -432,6 +492,16 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         tng_txt_feature_dir = txt_feature_dir / "train"
         tst_txt_feature_dir = txt_feature_dir / "test"
 
+        v1_image_files = (
+            get_v1_image_file_paths(
+                image_dirs=[
+                    pathlib.Path(d)
+                    for d in dl_manager.download_and_extract(_URLS["v1"])
+                ]
+            )
+            if self.config.name == "ralf"
+            else None
+        )
         return [
             ds.SplitGenerator(
                 name=ds.Split.TRAIN,  # type: ignore
@@ -441,6 +511,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
                     "img_json_path": tng_img_json_path,
                     "txt_path": tng_txt_path,
                     "txt_feature_dir": tng_txt_feature_dir,
+                    "v1_image_files": v1_image_files,
                 },
             ),
             ds.SplitGenerator(
@@ -461,6 +532,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
         img_dir: pathlib.Path,
         txt_path: pathlib.Path,
         txt_feature_dir: pathlib.Path,
+        v1_image_files: Optional[Dict[str, pathlib.Path]] = None,
         **kwargs,
     ):
         config: CGLDatasetV2Config = self.config  # type: ignore
@@ -500,4 +572,5 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
             categories=categories,
             texts=texts,
             text_features=text_features,
+            v1_image_files=v1_image_files,
         )
