@@ -7,12 +7,15 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 datasets = { extras = ["vision"], version = ">=1.0.0" }
 huggingface-datasets-cocoapi-tools = { extras = [
     "cocoapi",
 ], version = ">=0.4.0" }
 torch = ">=1.0.0"
+ralf-preprocessing-tools = { git = "https://github.com/creative-graphic-design/ralf-preprocessing-tools.git", rev = "initialize", extras = [
+    "lama",
+] }
 
 [tool.poetry.group.dev.dependencies]
 ruff = ">=0.1.5"

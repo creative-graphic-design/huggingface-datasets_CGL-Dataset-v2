@@ -1,8 +1,37 @@
+# Copyright 2024 Shunsuke Kitada and the current dataset script contributor.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# This script was generated from shunk031/cookiecutter-huggingface-datasets.
+#
+
+from __future__ import annotations
+
 import ast
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Tuple, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+    Union,
+)
 
 import datasets as ds
 import torch
@@ -21,6 +50,10 @@ from pydantic import BaseModel, Field, model_validator
 from tqdm import tqdm
 from typing_extensions import Self
 
+if TYPE_CHECKING:
+    from ralfpt.saliency_detection import SaliencyTester
+    from simple_lama_inpainting import SimpleLama
+
 logger = get_logger(__name__)
 
 
@@ -30,11 +63,11 @@ CGL-Dataset V2 is a dataset for the task of automatic graphic layout design of a
 
 _CITATION = """\
 @inproceedings{li2023relation,
-  title={Relation-Aware Diffusion Model for Controllable Poster Layout Generation},
-  author={Li, Fengheng and Liu, An and Feng, Wei and Zhu, Honghe and Li, Yaoyu and Zhang, Zheng and Lv, Jingjing and Zhu, Xin and Shen, Junjie and Lin, Zhangang},
-  booktitle={Proceedings of the 32nd ACM international conference on information & knowledge management},
-  pages={1249--1258},
-  year={2023}
+    title={Relation-Aware Diffusion Model for Controllable Poster Layout Generation},
+    author={Li, Fengheng and Liu, An and Feng, Wei and Zhu, Honghe and Li, Yaoyu and Zhang, Zheng and Lv, Jingjing and Zhu, Xin and Shen, Junjie and Lin, Zhangang},
+    booktitle={Proceedings of the 32nd ACM international conference on information & knowledge management},
+    pages={1249--1258},
+    year={2023}
 }
 """
 
@@ -258,7 +291,7 @@ class CGLv2Processor(InstancesProcessor):
         images_dict = {image.file_name: image for image in images.values()}
 
         texts = {}
-        with txt_path.open("r") as rf:
+        with txt_path.open("r", encoding="utf-8") as rf:
             for line in tqdm(rf, desc=tqdm_desc):
                 image_filename, json_str = line.split("\t")
                 text_dict = ast.literal_eval(json_str)
@@ -432,12 +465,101 @@ def restore_v1_filename(file_name):
     return f"{root}{ext}"
 
 
+def ralf_style_example(
+    example,
+    inpainter: SimpleLama,
+    saliency_testers: List[SaliencyTester],
+    saliency_map_cols: Sequence[str],
+):
+    from ralfpt.inpainting import apply_inpainting
+    from ralfpt.saliency_detection import apply_saliency_detection
+    from ralfpt.transforms import has_valid_area, load_from_cgl_ltwh
+    from ralfpt.typehints import Element
+
+    def get_cgl_layout_elements(
+        annotations, image_w: int, image_h: int
+    ) -> List[Element]:
+        elements = []
+
+        for ann in annotations:
+            category = ann["category"]
+            label = category["name"]
+
+            coordinates = load_from_cgl_ltwh(
+                ltwh=ann["bbox"], global_width=image_w, global_height=image_h
+            )
+            if has_valid_area(**coordinates):
+                element: Element = {"label": label, "coordinates": coordinates}
+                elements.append(element)
+
+        return elements
+
+    assert len(saliency_testers) == len(saliency_map_cols)
+
+    original_poster = example.get("original_poster")
+    if original_poster is None:
+        canvas = example["inpainted_poster"]
+        saliency_maps = apply_saliency_detection(
+            image=canvas,
+            saliency_testers=saliency_testers,  # type: ignore
+        )
+        for sal_col, sal_map in zip(saliency_map_cols, saliency_maps):
+            example[sal_col] = sal_map
+
+        return example
+
+    annotations = example["annotations"]
+    is_test = len(annotations) < 1
+
+    if is_test:
+        return example
+
+    image_w, image_h = example["width"], example["height"]
+
+    elements = get_cgl_layout_elements(
+        annotations=example["annotations"], image_w=image_w, image_h=image_h
+    )
+
+    #
+    # Apply RALF-style inpainting
+    #
+    inpainted_image = apply_inpainting(
+        image=original_poster, elements=elements, inpainter=inpainter
+    )
+    example["inpainted_poster"] = inpainted_image
+
+    #
+    # Apply Ralf-style saliency detection
+    #
+    saliency_maps = apply_saliency_detection(
+        image=inpainted_image,
+        saliency_testers=saliency_testers,  # type: ignore
+    )
+    for sal_col, sal_map in zip(saliency_map_cols, saliency_maps):
+        example[sal_col] = sal_map
+
+    return example
+
+
 @dataclass
 class CGLDatasetV2Config(ds.BuilderConfig):
     decode_rle: bool = False
     include_text_features: bool = False
     rename_category_names: bool = False
     processor: CGLv2Processor = CGLv2Processor()
+
+    saliency_maps: Sequence[str] = (
+        "saliency_map",
+        "saliency_map_sub",
+    )
+    saliency_testers: Sequence[str] = (
+        "creative-graphic-design/ISNet-general-use",
+        "creative-graphic-design/BASNet-SmartText",
+    )
+
+    def __post_init__(self):
+        super().__post_init__()
+        assert len(self.saliency_maps) == len(self.saliency_testers)
 
 
 class CGLDatasetV2(ds.GeneratorBasedBuilder):
@@ -565,7 +687,7 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
             decode_rle=config.decode_rle,
         )
 
-        yield from processor.generate_examples(
+        generator = processor.generate_examples(
             image_dir=img_dir,
             images=images,
             annotations=annotations,
@@ -574,3 +696,33 @@ class CGLDatasetV2(ds.GeneratorBasedBuilder):
             text_features=text_features,
             v1_image_files=v1_image_files,
         )
+
+        def _generate_default(generator):
+            for idx, example in generator:
+                yield idx, example
+
+        def _generate_ralf_style(generator):
+            from ralfpt.saliency_detection import SaliencyTester
+            from simple_lama_inpainting import SimpleLama
+
+            inpainter = SimpleLama()
+            saliency_testers = [
+                SaliencyTester(model_name=model) for model in config.saliency_testers
+            ]
+            for idx, example in generator:
+                example = ralf_style_example(
+                    example,
+                    inpainter=inpainter,
+                    saliency_map_cols=config.saliency_maps,
+                    saliency_testers=saliency_testers,
+                )
+                yield idx, example
+
+        if config.name == "default":
+            yield from _generate_default(generator)
+
+        elif config.name == "ralf":
+            yield from _generate_ralf_style(generator)
+
+        else:
+            raise ValueError(f"Invalid config name: {config.name}")
