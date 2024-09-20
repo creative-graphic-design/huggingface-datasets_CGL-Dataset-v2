@@ -13,7 +13,7 @@ huggingface-datasets-cocoapi-tools = { extras = [
     "cocoapi",
 ], version = ">=0.4.0" }
 torch = ">=1.0.0"
-ralf-preprocessing-tools = { git = "https://github.com/creative-graphic-design/ralf-preprocessing-tools.git", rev = "initialize", extras = [
+ralf-preprocessing-tools = { git = "https://github.com/creative-graphic-design/ralf-preprocessing-tools.git", extras = [
     "lama",
 ] }
 
@@ -27,7 +27,7 @@ types-pycocotools = "^2.0.0.20240106"
 types-tqdm = "^4.66.0.20240106"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 ignore_missing_imports = true
 
 [build-system]
